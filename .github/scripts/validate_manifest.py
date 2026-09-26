@@ -1,6 +1,6 @@
 """校验插件清单与入口，规则对齐 NeoBot 的 neobot_modloader。
 
-可本地运行：%(python)s .github/scripts/validate_manifest.py
+可本地运行：python .github/scripts/validate_manifest.py
 """
 
 from __future__ import annotations

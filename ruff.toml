@@ -1,0 +1,16 @@
+# 插件仓库的 lint 配置。
+#
+# 与 NeoBot 本体保持一致：requires-python >= 3.13。
+# 这一项必须显式声明——没有 pyproject.toml 时 ruff 会退回更低的默认目标版本，
+# 把 tomllib（3.11+ 标准库）误判成第三方包，进而报 import 排序错误。
+target-version = "py313"
+
+# N999：本仓库根目录名是仓库名（NeoBot_Bilibili），不是合法的 Python 模块名。
+#      NeoBot 加载插件时并不按目录名导入，而是以
+#      neobot_user_plugins.<safe>_<sha1前12>_g<N> 的形式导入（见 modloader/loading/importer.py），
+#      因此这条命名规则在这里不适用。
+lint.ignore = ["N999"]
+
+# neobot_modloader / neobot_contracts 是宿主框架，对插件而言属于本体依赖而非第三方包，
+# 据此固定 import 分组，避免 CI 与本地判定不一致。
+lint.isort.known-first-party = ["neobot_modloader", "neobot_contracts"]

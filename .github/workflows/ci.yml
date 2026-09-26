@@ -13,7 +13,8 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # 与 NeoBot 本体一致：requires-python >= 3.13（旧版本连 tomllib 都没有）
+          python-version: "3.13"
 
       - name: 校验 plugin.toml 与入口一致性
         run: python .github/scripts/validate_manifest.py
