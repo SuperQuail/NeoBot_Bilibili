@@ -27,9 +27,9 @@ class BilibiliConfig(BaseModel):
 
 
 plugin = Plugin(
-    "bilibili",
+    "streaming_parser",
     version="0.1.0",
-    description="B 站数据解析：直播间、用户与投稿信息（amagi 协议的纯 Python 实现）",
+    description="流媒体平台解析：B 站直播间监听、开播/下播推送与卡片渲染（amagi 协议的纯 Python 实现）",
     author="SuperQuail",
     config=BilibiliConfig,
 )

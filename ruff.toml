@@ -5,7 +5,7 @@
 # 把 tomllib（3.11+ 标准库）误判成第三方包，进而报 import 排序错误。
 target-version = "py313"
 
-# N999：本仓库根目录名是仓库名（NeoBot_Bilibili），不是合法的 Python 模块名。
+# N999：本仓库根目录名是仓库名（NeoBot_StreamingParser），不是合法的 Python 模块名。
 #      NeoBot 加载插件时并不按目录名导入，而是以
 #      neobot_user_plugins.<safe>_<sha1前12>_g<N> 的形式导入（见 modloader/loading/importer.py），
 #      因此这条命名规则在这里不适用。

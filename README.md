@@ -1,4 +1,4 @@
-# NeoBot_Bilibili
+# NeoBot_StreamingParser
 
 NeoBot 的 B 站数据解析插件：把 [@ikenxuan/amagi](https://github.com/ikenxuan/amagi) 里以 TypeScript 实现的 B 站 Web 接口协议，用**尽可能纯 Python** 的方式重新实现。
 
@@ -9,18 +9,18 @@ NeoBot 的 B 站数据解析插件：把 [@ikenxuan/amagi](https://github.com/ik
 插件目录就是本仓库根目录，把整个目录放进 NeoBot 的插件文件夹即可：
 
 ```text
-<NeoBot>/app/data/plugins/bilibili/
+<NeoBot>/app/data/plugins/streaming_parser/
 ```
 
 NeoBot 启动时会扫描插件目录，发现含 `__init__.py` 且导出 `plugin = Plugin(...)` 的目录并加载
 （第三方插件目录由 `[plugins].dir` 决定，默认 `./plugins`，相对数据目录解析）。
-本仓库 `plugin.toml` 的 name / version 必须与 `Plugin("bilibili")` 一致，
+本仓库 `plugin.toml` 的 name / version 必须与 `Plugin("streaming_parser")` 一致，
 `repo` 字段指向本站，面板用它做更新检查。
 
 ## 配置
 
 配置项在 `plugin.toml` 的 `[config]` 中作为打包默认值，用户实际配置落在
-`<NeoBot>/app/data/plugins_data/bilibili/config.toml`：
+`<NeoBot>/app/data/plugins_data/streaming_parser/config.toml`：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|

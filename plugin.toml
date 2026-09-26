@@ -1,14 +1,14 @@
 # NeoBot 插件清单：neobot_modloader 在启动时扫描插件目录读取本文件。
 # 字段语义见 NeoBot 仓库 packages/modloader/src/neobot_modloader/loading/manifest.py。
-name = "bilibili"
+name = "streaming_parser"
 version = "0.1.0"
-description = "B 站数据解析：直播间、用户与投稿信息（amagi 协议的纯 Python 实现）"
+description = "流媒体平台解析：B 站直播间监听、开播/下播推送与卡片渲染（amagi 协议的纯 Python 实现）"
 author = "SuperQuail"
 license = "MIT"
-homepage = "https://github.com/SuperQuail/NeoBot_Bilibili"
-repo = "https://github.com/SuperQuail/NeoBot_Bilibili"
+homepage = "https://github.com/SuperQuail/NeoBot_StreamingParser"
+repo = "https://github.com/SuperQuail/NeoBot_StreamingParser"
 branch = "main"
-tags = ["bilibili", "live", "parser"]
+tags = ["bilibili", "live", "parser", "notify"]
 
 # 插件间依赖，空表示不依赖任何其他插件（网页面板接入留待后续版本）。
 dependencies = []
