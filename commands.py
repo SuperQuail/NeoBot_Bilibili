@@ -160,7 +160,7 @@ def _register_subscription_commands(registrar: Any, ctx: Any, state: Any) -> lis
             return
         config = state.config
         async with state.database.transaction() as session:
-            _, created = await db.upsert_subscription(
+            row, created = await db.upsert_subscription(
                 session,
                 group_id=group_id,
                 room_id=resolved["room_id"],
@@ -168,23 +168,29 @@ def _register_subscription_commands(registrar: Any, ctx: Any, state: Any) -> lis
                 uid=resolved.get("uid", 0),
                 name=resolved.get("name", ""),
                 avatar_url=resolved.get("avatar_url", ""),
+                # 监听即自动建好开播与下播两条推送（默认都为开）；
+                # 已经监听过的房间只刷新主播信息，不动用户手动改过的开关。
                 push_live=config.default_push_live,
                 push_live_end=config.default_push_live_end,
             )
+            view = db.sub_view(row)
         title = "已开始监听" if created else "已更新监听信息"
         name = resolved.get("name") or UNNAMED
+        room_id = view.room_id if view is not None else resolved["room_id"]
+        push_live = view.push_live if view is not None else config.default_push_live
+        push_live_end = view.push_live_end if view is not None else config.default_push_live_end
         await cards.send_card(
             command_ctx,
             cards.kv_card(
                 title=title,
                 items=[
                     ("主播", name),
-                    ("房间号", str(resolved["room_id"])),
-                    ("开播推送", "开" if config.default_push_live else "关"),
-                    ("下播推送", "开" if config.default_push_live_end else "关"),
-                    ("直播间", live_room_page_url(resolved["room_id"])),
+                    ("房间号", str(room_id)),
+                    ("开播推送", "开" if push_live else "关"),
+                    ("下播推送", "开" if push_live_end else "关"),
+                    ("直播间", live_room_page_url(room_id)),
                 ],
-                note="用 /开播状态 看本群关注的主播，用 /config 调整推送与 AI 回复",
+                note="开播与下播都会推卡片；不想要哪个就用 /开播推送 或 /下播推送 关掉，AI 回复用 /config 调整",
             ),
             screenshots=shots(ctx),
         )

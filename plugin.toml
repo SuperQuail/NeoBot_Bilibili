@@ -1,7 +1,7 @@
 # NeoBot 插件清单：neobot_modloader 在启动时扫描插件目录读取本文件。
 # 字段语义见 NeoBot 仓库 packages/modloader/src/neobot_modloader/loading/manifest.py。
 name = "streaming_parser"
-version = "0.3.0"
+version = "0.3.1"
 description = "流媒体平台解析：B 站直播间监听、开播/下播推送与卡片渲染（amagi 协议的纯 Python 实现）"
 author = "SuperQuail"
 license = "MIT"
@@ -37,8 +37,8 @@ poll_concurrency = 4
 default_card_style = "random"
 # 新订阅的直播间默认是否推送开播。
 default_push_live = true
-# 新订阅的直播间默认是否推送下播。
-default_push_live_end = false
+# 新订阅的直播间默认是否推送下播。默认开：/监听 一个直播间就同时建好开播与下播推送。
+default_push_live_end = true
 # 默认是否在推送开播卡片后再触发一次 AI 回复。
 default_ai_reply_live = true
 # 默认是否在推送下播卡片后再触发一次 AI 回复。

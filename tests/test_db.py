@@ -530,3 +530,122 @@ class TestCollectStates:
         assert is_fresh is False
         assert states[10].live_status == 2
 
+
+class TestSubscribeEnablesBothPushes:
+    """监听一个直播间后，开播与下播推送都应当自动建好（用户要求的行为）。"""
+
+    @staticmethod
+    def _make_state(database, config):
+        class FakeState:
+            def __init__(self):
+                self.database = database
+                self.config = config
+                self.poller = None
+
+            async def resolve_target(self, kind, value):
+                return {
+                    'room_id': 1914112138,
+                    'uid': 392669996,
+                    'short_id': 0,
+                    'name': 'Icyの狼',
+                    'avatar_url': '',
+                }
+
+        return FakeState()
+
+    @staticmethod
+    def _make_ctx():
+        class Registrar:
+            available = True
+
+            def __init__(self):
+                self.commands = {}
+
+            def register(self, name=None, **kwargs):
+                def _decorate(handler):
+                    self.commands[name] = handler
+                    return handler
+
+                return _decorate
+
+            def renames(self):
+                return []
+
+        class Logger:
+            def _record(self, *args, **kwargs):
+                pass
+
+            info = _record
+            warning = _record
+            debug = _record
+            error = _record
+
+        class Ctx:
+            def __init__(self):
+                self.app_commands = Registrar()
+                self.logger = Logger()
+                self.screenshots = None
+
+        return Ctx()
+
+    @staticmethod
+    def _make_command_ctx(args):
+        class Service:
+            async def send_image_bytes(self, *args, **kwargs):
+                return False  # 强制走文本降级，便于断言卡片内容
+
+        class CommandCtx:
+            def __init__(self):
+                self.kind = 'group'
+                self.conv_id = '123'
+                self.user_id = 42
+                self.args = list(args)
+                self.raw_args = ' '.join(args)
+                self.service = Service()
+                self.plain = []
+
+            async def reply_plain(self, text):
+                self.plain.append(text)
+
+        return CommandCtx()
+
+    async def test_subscribe_enables_live_and_live_end_push(self, database):
+        from streaming_parser.commands import register_commands
+        from streaming_parser.config import StreamConfig
+
+        ctx = self._make_ctx()
+        register_commands(ctx, self._make_state(database, StreamConfig()))
+        command_ctx = self._make_command_ctx(['392669996'])
+
+        await ctx.app_commands.commands['监听'](command_ctx)
+
+        async with database.session() as session:
+            rows = [pdb.sub_view(row) for row in await pdb.list_group_subscriptions(session, 123)]
+        assert len(rows) == 1
+        assert rows[0].push_live is True
+        assert rows[0].push_live_end is True
+        text = command_ctx.plain[0]
+        assert '开播推送: 开' in text
+        assert '下播推送: 开' in text
+
+    async def test_relisten_keeps_manual_override(self, database):
+        from streaming_parser.commands import register_commands
+        from streaming_parser.config import StreamConfig
+
+        ctx = self._make_ctx()
+        register_commands(ctx, self._make_state(database, StreamConfig()))
+        handler = ctx.app_commands.commands['监听']
+        await handler(self._make_command_ctx(['392669996']))
+        async with database.transaction() as session:
+            await pdb.set_subscription_flags(session, 123, 1914112138, push_live_end=False)
+
+        # 再次监听同一个房间：只刷新信息，不能把用户手动关掉的开关又打开
+        second = self._make_command_ctx(['392669996'])
+        await handler(second)
+
+        async with database.session() as session:
+            rows = [pdb.sub_view(row) for row in await pdb.list_group_subscriptions(session, 123)]
+        assert len(rows) == 1
+        assert rows[0].push_live_end is False
+        assert '下播推送: 关' in second.plain[0]
+

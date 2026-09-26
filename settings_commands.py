@@ -6,7 +6,7 @@ import asyncio
 from typing import Any
 
 from . import cards, db
-from .commands import UNNAMED, command_args, conv_group_id, fail, shots, usage_card
+from .commands import UNNAMED, command_args, conv_group_id, fail, shots
 from .render import STYLE_ORDER
 
 try:
@@ -51,8 +51,8 @@ def config_lines(setting: Any, config: Any) -> list[str]:
         "开播后触发 AI 回复：" + ("开" if setting.ai_reply_live else "关"),
         "下播后触发 AI 回复：" + ("开" if setting.ai_reply_live_end else "关"),
         "卡片风格：" + (setting.card_style or default_style),
-        "新订阅默认开播推送：" + ("开" if setting.default_push_live else "关"),
-        "新订阅默认下播推送：" + ("开" if setting.default_push_live_end else "关"),
+        "监听新直播间时自动开启：开播推送 " + ("开" if setting.default_push_live else "关")
+        + "、下播推送 " + ("开" if setting.default_push_live_end else "关"),
         "/config 开播AI 开|关    只发卡片不叫 AI：/config 开播AI 关",
         "/config 下播AI 开|关",
         "/config 风格 " + style_list_text() + "|随机",

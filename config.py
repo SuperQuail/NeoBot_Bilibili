@@ -21,8 +21,10 @@ class StreamConfig(BaseModel):
     # 默认卡片风格：random 表示每次随机挑一个，也可写死某个风格名。
     default_card_style: str = "random"
     # 新订阅的房间是否默认推送开播 / 下播。
+    # 默认两个都开：/监听 一个直播间就自动建好上播与下播两条推送，
+    # 不想要的可以用 /开播推送、/下播推送 单独关，或在这里改默认值。
     default_push_live: bool = True
-    default_push_live_end: bool = False
+    default_push_live_end: bool = True
     # 新群默认是否在推送卡片后触发一次 AI 回复（可按群用命令覆盖）。
     default_ai_reply_live: bool = True
     default_ai_reply_live_end: bool = False

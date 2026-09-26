@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from streaming_parser import cards
 from streaming_parser.commands import (
     command_args,
@@ -261,4 +260,15 @@ class TestCardPayloads:
     async def test_render_without_screenshots_returns_none(self):
         payload = cards.kv_card(title='x', items=[('a', 'b')])
         assert await cards.render_payload_png(payload, screenshots=None) is None
+
+
+class TestPushDefaults:
+    """默认值就是把开播与下播推送都打开（/监听 之后无需再手动开）。"""
+
+    def test_config_enables_both_pushes_by_default(self):
+        from streaming_parser.config import StreamConfig
+
+        config = StreamConfig()
+        assert config.default_push_live is True
+        assert config.default_push_live_end is True
 

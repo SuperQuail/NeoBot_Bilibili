@@ -34,7 +34,7 @@ NeoBot 启动时扫描插件目录，发现含 `__init__.py` 且导出 `plugin =
 
 | 命令 | 说明 |
 |---|---|
-| `/监听 <房间号\|短号\|链接>` | 让本群开始监听该直播间 |
+| `/监听 <房间号\|短号\|链接>` | 让本群开始监听该直播间，**自动开启它的开播与下播推送** |
 | `/取消监听 <房间号\|短号\|链接>` | 取消监听 |
 | `/监听列表` | 列出本群监听的全部直播间与推送开关 |
 | `/开播推送 <房间号> 开\|关` | 单独开关某个直播间的开播推送 |
@@ -107,7 +107,7 @@ python research/tools/render_samples.py <UID>
 | `user_agent` | 空 | 自定义 UA |
 | `poll_concurrency` | 4 | 同时轮询的房间数 |
 | `default_card_style` | random | 默认卡片风格 |
-| `default_push_live` / `default_push_live_end` | true / false | 新订阅默认开关 |
+| `default_push_live` / `default_push_live_end` | true / true | 监听新直播间时自动开启的推送（两个都默认开） |
 | `default_ai_reply_live` / `default_ai_reply_live_end` | true / false | 推送后是否默认触发 AI 回复 |
 | `overview_max_hosts` | 30 | 总览图最多显示多少位 |
 | `asset_cache_days` | 14 | 头像/封面本地缓存天数 |

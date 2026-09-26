@@ -29,7 +29,7 @@ from .notify import Notifier
 from .poller import LivePoller
 from .render import CardRenderer, resolve_style
 
-PLUGIN_VERSION = "0.3.0"
+PLUGIN_VERSION = "0.3.1"
 PLUGIN_DESCRIPTION = "流媒体平台解析：B 站直播间监听、开播/下播推送与卡片渲染"
 
 PLUGIN_DIR = Path(__file__).resolve().parent
