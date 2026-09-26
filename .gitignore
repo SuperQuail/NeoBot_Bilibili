@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 测试与静态检查缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 技术验证与测试（研究）目录：仅本地使用，不入库
+/research/
+
+# 前端依赖与中间产物。注意：构建产物 web/ 必须入库（部署侧不装 Node）
+node_modules/
+frontend/node_modules/
+frontend/dist/
+web/dist/
+.pnpm-store/
+*.tsbuildinfo
+
+# 本地私有配置与草稿
+.env
+*.local.toml

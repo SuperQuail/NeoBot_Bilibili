@@ -1,0 +1,30 @@
+# NeoBot 插件清单：neobot_modloader 在启动时扫描插件目录读取本文件。
+# 字段语义见 NeoBot 仓库 packages/modloader/src/neobot_modloader/loading/manifest.py。
+name = "bilibili"
+version = "0.1.0"
+description = "B 站数据解析：直播间、用户与投稿信息（amagi 协议的纯 Python 实现）"
+author = "SuperQuail"
+license = "MIT"
+homepage = "https://github.com/SuperQuail/NeoBot_Bilibili"
+repo = "https://github.com/SuperQuail/NeoBot_Bilibili"
+branch = "main"
+tags = ["bilibili", "live", "parser"]
+
+# 插件间依赖，空表示不依赖任何其他插件（网页面板接入留待后续版本）。
+dependencies = []
+priority = 0
+
+# PyPI 依赖：空壳阶段只用标准库；协议层落地后按需加入 httpx 等（本体已自带）
+python_dependencies = []
+
+# 插件本体可热重载；配置改动需要重启或重载插件才生效。
+hot_reload = true
+config_hot_reload = false
+
+[config]
+# 单次 HTTP 请求超时（秒）。
+request_timeout = 10.0
+# B 站 Cookie 串，例如 "SESSDATA=xxx; bili_jct=yyy"；留空表示匿名请求。
+cookie = ""
+# 自定义 User-Agent；留空则使用内置默认 UA。
+user_agent = ""
