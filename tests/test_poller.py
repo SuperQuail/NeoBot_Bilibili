@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime
 
 import pytest
-
 from streaming_parser.bilibili.models import CST, LiveRoomInfo
 from streaming_parser.poller import (
     EVENT_LIVE,

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from conftest import json_response, text_response
 
 from bilibili.client import BilibiliLiveClient
 from bilibili.errors import BilibiliAPIError, BilibiliTransportError
-
-from .conftest import json_response, text_response
 
 
 def make_client(fake_transport, responses, slept, sleep, **kwargs):

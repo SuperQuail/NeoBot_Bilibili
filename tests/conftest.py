@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import pathlib
@@ -11,6 +12,10 @@ from typing import Any
 
 import pytest
 
+PLUGIN_DIR = pathlib.Path(__file__).resolve().parents[1]
+#: 强制走「无 NeoBot」分支，用来在本地复现 CI 环境
+FORCE_STUB = os.environ.get("STREAMING_PARSER_TEST_FORCE_STUB") == "1"
+
 
 def install_modloader_stub() -> bool:
     """没有 NeoBot 时（例如 GitHub CI）装一个最小替身，让插件模块可以被 import。
@@ -18,12 +23,13 @@ def install_modloader_stub() -> bool:
     只覆盖「导入期」需要的符号；真正的运行期能力（数据库、截图端口）在 CI 里不可用，
     相关测试会用 pytest.skip 显式跳过，而不是假装通过。
     """
-    try:
-        import neobot_modloader  # noqa: F401
+    if not FORCE_STUB:
+        try:
+            import neobot_modloader  # noqa: F401
 
-        return False
-    except ImportError:
-        pass
+            return False
+        except ImportError:
+            pass
 
     stub = types.ModuleType("neobot_modloader")
     stub.IS_TEST_STUB = True  # type: ignore[attr-defined]
@@ -75,6 +81,37 @@ def install_modloader_stub() -> bool:
 
 
 USING_MODLOADER_STUB = install_modloader_stub()
+
+
+def install_plugin_package_alias() -> bool:
+    """保证 import streaming_parser 在任何环境都能解析。
+
+    仓库目录名就是插件名（例如 GitHub 上叫 NeoBot_StreamingParser），
+    所以不能靠目录名导入；这里按文件位置把插件目录注册成 streaming_parser 包。
+    返回是否新建了别名。
+    """
+    if 'streaming_parser' in sys.modules:
+        return False
+    try:
+        import streaming_parser  # noqa: F401
+
+        return False
+    except ImportError:
+        pass
+    spec = importlib.util.spec_from_file_location(
+        'streaming_parser',
+        PLUGIN_DIR / '__init__.py',
+        submodule_search_locations=[str(PLUGIN_DIR)],
+    )
+    if spec is None or spec.loader is None:
+        return False
+    module = importlib.util.module_from_spec(spec)
+    sys.modules['streaming_parser'] = module
+    spec.loader.exec_module(module)
+    return True
+
+
+USING_PLUGIN_ALIAS = install_plugin_package_alias()
 
 # 这个导入必须放在替身安装之后（替身要先注册进 sys.modules），故豁免 E402。
 from bilibili.client import RawResponse  # noqa: E402

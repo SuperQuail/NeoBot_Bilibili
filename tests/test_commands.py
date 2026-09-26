@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from streaming_parser.commands import group_id_of, parse_target
 
 

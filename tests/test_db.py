@@ -10,10 +10,11 @@ if getattr(modloader, 'IS_TEST_STUB', False):
 
 # 这些导入必须在 importorskip 之后：没有真实 modloader 时整模块跳过，
 # 否则收集阶段就会因为缺依赖而报错。因此这里显式豁免 E402。
-from neobot_modloader import PluginDatabase  # noqa: E402
 from streaming_parser import db as pdb  # noqa: E402
 from streaming_parser.bilibili.models import LiveRoomInfo  # noqa: E402
 from streaming_parser.poller import EVENT_LIVE, EVENT_LIVE_END, LivePoller  # noqa: E402
+
+from neobot_modloader import PluginDatabase  # noqa: E402
 
 
 @pytest.fixture
