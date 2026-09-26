@@ -38,7 +38,8 @@ def main() -> int:
     if isinstance(name, str):
         check(NAME_PATTERN.fullmatch(name) is not None, f"name 不合法: {name!r}")
         check("__" not in name, f"name 不能包含双下划线: {name!r}")
-        check(name == ROOT.name, f"name ({name!r}) 应与仓库目录名 ({ROOT.name!r}) 一致")
+        # 注意：插件名不要求等于仓库名（例如仓库 NeoBot_Dashboard 的插件名是 dashboard），
+        # NeoBot 只要求 plugin.toml 的 name 与 Plugin(...) 的 name 一致。
 
     version = manifest.get("version")
     check(isinstance(version, str) and bool(version), "plugin.toml 缺少 version")
