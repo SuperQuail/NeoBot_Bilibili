@@ -23,6 +23,10 @@ web/dist/
 .pnpm-store/
 *.tsbuildinfo
 
+# 样例成品图：里面含真实 UP 的头像与封面，不随仓库分发（本地仍保留）。
+# 需要重新生成：python research/tools/render_samples.py <UID>
+docs/samples/*.png
+
 # 本地私有配置与草稿
 .env
 *.local.toml

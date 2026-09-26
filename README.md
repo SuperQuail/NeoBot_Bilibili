@@ -66,7 +66,7 @@ NeoBot 启动时扫描插件目录，发现含 `__init__.py` 且导出 `plugin =
 
 ## 效果示例
 
-`docs/samples/` 里是用真实数据渲染出来的成品（测试对象 UID 392669996 / 房间 1914112138）：
+`docs/samples/` 是用真实数据渲染出来的成品（`manifest.json` 记录了渲染时用的数据）：
 
 | 文件 | 内容 |
 |---|---|
@@ -75,7 +75,15 @@ NeoBot 启动时扫描插件目录，发现含 `__init__.py` 且导出 `plugin =
 | `overview_{sakura,neon,minimal}.png` | 开播状态总览图：开播中的主播带粉色圆环 + LIVE 角标，未开播的降透明度、无圆环 |
 | `manifest.json` | 渲染时用的真实数据快照 |
 
-重新生成：`python research/tools/render_samples.py <UID>`（`research/` 不入库）。
+**样例图不入库**：里面有真实 UP 的头像与封面，`docs/samples/*.png` 已在 `.gitignore` 里排除，
+只在本地保留。换任何人重新生成都可以：
+
+```bash
+python research/tools/render_samples.py <UID>
+```
+
+脚本走的是生产渲染路径（同一个 `CardRenderer`、同一批模板、同一份字体），
+只有截图端口用 Playwright 顶替宿主的 Chromium 服务。
 
 ## 配置
 
