@@ -180,6 +180,7 @@ class PluginState:
             timeout=max(10.0, config.request_timeout * 1.5),
             user_agent=config.user_agent or None,
             ttl_days=config.asset_cache_days,
+            logger=ctx.logger,
         )
         self.renderer = CardRenderer(
             TEMPLATE_DIR,

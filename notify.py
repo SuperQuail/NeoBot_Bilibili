@@ -52,6 +52,34 @@ def build_agent_prompt(
     )
 
 
+def build_card_values(
+    *,
+    kind: str,
+    room_id: int,
+    name: str,
+    title: str,
+    area_name: str,
+    online: int,
+    live_time: Any,
+    cover_src: str,
+    avatar_src: str,
+) -> dict[str, Any]:
+    """组装模板需要的全部占位符。推送与样例渲染共用，保证两边完全一致。"""
+    label = "开播了" if kind == EVENT_LIVE else "下播了"
+    return {
+        "avatar_src": avatar_src,
+        "cover_src": cover_src,
+        "name": name or f"房间 {room_id}",
+        "title": title or "（无标题）",
+        "area_name": area_name,
+        "online_text": format_online(online),
+        "live_time_text": format_live_time(live_time) if kind == EVENT_LIVE else "",
+        "status_text": label,
+        "room_id": format_room_id(room_id),
+        "host_label": "Bilibili Live",
+    }
+
+
 class Notifier:
     """把状态跳变变成群里的卡片 / 文字，并可选触发一次 AI 回复。"""
 
@@ -140,19 +168,17 @@ class Notifier:
         snapshot = transition.snapshot
         avatar_src = await self._assets.fetch_data_uri(subscription.avatar_url or "")
         cover_src = await self._assets.fetch_data_uri(snapshot.cover_url)
-        label = "开播了" if transition.kind == EVENT_LIVE else "下播了"
-        values = {
-            "avatar_src": avatar_src,
-            "cover_src": cover_src,
-            "name": subscription.name or f"房间 {transition.room_id}",
-            "title": snapshot.title or "（无标题）",
-            "area_name": snapshot.area_name,
-            "online_text": format_online(snapshot.online),
-            "live_time_text": format_live_time(snapshot.live_time) if transition.kind == EVENT_LIVE else "",
-            "status_text": label,
-            "room_id": format_room_id(transition.room_id),
-            "host_label": "Bilibili Live",
-        }
+        values = build_card_values(
+            kind=transition.kind,
+            room_id=transition.room_id,
+            name=subscription.name or f"房间 {transition.room_id}",
+            title=snapshot.title,
+            area_name=snapshot.area_name,
+            online=snapshot.online,
+            live_time=snapshot.live_time,
+            cover_src=cover_src,
+            avatar_src=avatar_src,
+        )
         return await self._renderer.render_card(values, style=style)
 
     async def _send_image(self, group_id: int, data: bytes) -> bool:

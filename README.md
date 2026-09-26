@@ -64,6 +64,19 @@ NeoBot 启动时扫描插件目录，发现含 `__init__.py` 且导出 `plugin =
 
 随包分发的中文字体是 [FusionPixel](https://github.com/TakWolf/fusion-pixel-font)（OFL 许可），许可文本在 `templates/fonts/LICENSE-FusionPixel-OFL.txt`。
 
+## 效果示例
+
+`docs/samples/` 里是用真实数据渲染出来的成品（测试对象 UID 392669996 / 房间 1914112138）：
+
+| 文件 | 内容 |
+|---|---|
+| `card_{sakura,neon,minimal}_live.png` | 三种风格的开播卡片 |
+| `card_{sakura,neon,minimal}_live_end.png` | 同三种风格的下播卡片（注意开播时间那行会整块消失） |
+| `overview_{sakura,neon,minimal}.png` | 开播状态总览图：开播中的主播带粉色圆环 + LIVE 角标，未开播的降透明度、无圆环 |
+| `manifest.json` | 渲染时用的真实数据快照 |
+
+重新生成：`python research/tools/render_samples.py <UID>`（`research/` 不入库）。
+
 ## 配置
 
 `plugin.toml` 的 `[config]` 是打包默认值，用户实际配置落在 `<NeoBot>/app/data/plugins_data/streaming_parser/config.toml`：
