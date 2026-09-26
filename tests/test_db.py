@@ -423,3 +423,110 @@ class TestNotifierIntegration:
 
         assert renderer.calls[0][1] == 'neon'
 
+
+class FakePoller:
+    """只会返回预设实时快照的轮询器替身。"""
+
+    def __init__(self, snapshots):
+        self.snapshots = snapshots
+        self.calls = []
+
+    async def refresh(self, room_ids):
+        self.calls.append(list(room_ids))
+        return {rid: self.snapshots[rid] for rid in room_ids if rid in self.snapshots}
+
+
+class FakeLogger:
+    def __init__(self):
+        self.messages = []
+
+    def _record(self, message, *args, **kwargs):
+        self.messages.append(str(message))
+
+    info = _record
+    warning = _record
+    debug = _record
+    error = _record
+
+
+class TestRefresh:
+    async def test_refresh_returns_snapshots_without_writing_store(self, database):
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(session, group_id=1, room_id=10)
+        client = FakeClient({10: [1]})
+        poller = LivePoller(client=client, database=database, poll_interval=15)
+
+        fresh = await poller.refresh([10])
+
+        assert fresh[10].live_status == 1
+        async with database.session() as session:
+            assert await pdb.get_room_state(session, 10) is None
+
+    async def test_refresh_empty_list_is_noop(self, database):
+        poller = LivePoller(client=FakeClient({}), database=database, poll_interval=15)
+        assert await poller.refresh([]) == {}
+
+
+class TestCollectStates:
+    """覆盖用户报告的问题：库里是旧状态时，/开播状态 必须以实时查询为准。"""
+
+    async def test_prefers_fresh_over_stored(self, database):
+        from types import SimpleNamespace
+
+        from streaming_parser.poller import RoomSnapshot
+        from streaming_parser.settings_commands import collect_states
+
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(session, group_id=1, room_id=10, name='甲')
+            await pdb.upsert_room_state(session, 10, live_status=0, title='旧标题')
+        snapshot = RoomSnapshot(room_id=10, live_status=1, title='新标题', online=123)
+        state = SimpleNamespace(
+            database=database,
+            poller=FakePoller({10: snapshot}),
+            logger=FakeLogger(),
+        )
+        async with database.session() as session:
+            rows = [pdb.sub_view(row) for row in await pdb.list_group_subscriptions(session, 1)]
+
+        states, is_fresh = await collect_states(state, state, rows)
+
+        assert is_fresh is True
+        assert states[10].live_status == 1
+        assert states[10].title == '新标题'
+
+    async def test_falls_back_to_stored_when_live_query_fails(self, database):
+        from types import SimpleNamespace
+
+        from streaming_parser.settings_commands import collect_states
+
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(session, group_id=1, room_id=10, name='甲')
+            await pdb.upsert_room_state(session, 10, live_status=1, title='库里的标题')
+        logger = FakeLogger()
+        state = SimpleNamespace(database=database, poller=FakePoller({}), logger=logger)
+        async with database.session() as session:
+            rows = [pdb.sub_view(row) for row in await pdb.list_group_subscriptions(session, 1)]
+
+        states, is_fresh = await collect_states(state, state, rows)
+
+        assert is_fresh is False
+        assert states[10].live_status == 1
+        assert states[10].title == '库里的标题'
+
+    async def test_poller_unavailable_uses_stored(self, database):
+        from types import SimpleNamespace
+
+        from streaming_parser.settings_commands import collect_states
+
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(session, group_id=1, room_id=10)
+            await pdb.upsert_room_state(session, 10, live_status=2)
+        state = SimpleNamespace(database=database, poller=None, logger=FakeLogger())
+        async with database.session() as session:
+            rows = [pdb.sub_view(row) for row in await pdb.list_group_subscriptions(session, 1)]
+
+        states, is_fresh = await collect_states(state, state, rows)
+
+        assert is_fresh is False
+        assert states[10].live_status == 2
+

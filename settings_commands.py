@@ -1,24 +1,38 @@
-"""设置类命令：开播状态总览图 / 卡片风格 / config。"""
+"""设置类命令：/开播状态、/卡片风格、/config。"""
 
 from __future__ import annotations
 
 import asyncio
 from typing import Any
 
-from . import db
-from .commands import UNNAMED, group_id_of
+from . import cards, db
+from .commands import UNNAMED, command_args, conv_group_id, fail, shots, usage_card
 from .render import STYLE_ORDER
 
+try:
+    from neobot_app.commands.model import PERM_EVERYONE, PERM_SUB_ADMIN
+except Exception:  # pragma: no cover
+    PERM_EVERYONE = 0
+    PERM_SUB_ADMIN = 1
+
+#: 开播状态总览的渲染超时（渲染端口本身是串行的，给足时间但别无限等）
 OVERVIEW_TIMEOUT = 25.0
 OVERVIEW_FILENAME = "streaming_parser_overview.png"
 RANDOM_WORDS = ("随机", "random")
 
+STATUS_LABELS = {0: "未开播", 1: "直播中", 2: "轮播中"}
 
-def _style_list_text() -> str:
+
+def status_label(live_status: int) -> str:
+    """0 未开播 / 1 直播中 / 2 轮播（轮播不算开播，但要在总览里区分出来）。"""
+    return STATUS_LABELS.get(int(live_status), "未知")
+
+
+def style_list_text() -> str:
     return " / ".join(STYLE_ORDER)
 
 
-def _match_style(value: str | None) -> str | None:
+def match_style(value: str | None) -> str | None:
     """把用户输入的风格名归一成已登记风格或 random；不合法返回 None。"""
     wanted = (value or "").strip().lower()
     if not wanted:
@@ -30,43 +44,97 @@ def _match_style(value: str | None) -> str | None:
     return None
 
 
-def _parse_switch(value: str | None) -> bool | None:
-    text = (value or "").strip().lower()
-    if text in {"1", "true", "yes", "y", "on", "开", "开启"}:
-        return True
-    if text in {"0", "false", "no", "n", "off", "关", "关闭"}:
-        return False
-    return None
-
-
-def config_text(setting: Any, config: Any) -> str:
-    """/config 无参数时的说明 + 当前值。"""
+def config_lines(setting: Any, config: Any) -> list[str]:
+    """卡片里展示的当前设置 + 用法。"""
     default_style = getattr(config, "default_card_style", "random") if config else "random"
-    return "\n".join([
-        "本群推送设置：",
-        "  开播AI：" + ("开" if setting.ai_reply_live else "关"),
-        "  下播AI：" + ("开" if setting.ai_reply_live_end else "关"),
-        "  卡片风格：" + (setting.card_style or default_style),
-        "  新订阅默认开播推送：" + ("开" if setting.default_push_live else "关"),
-        "  新订阅默认下播推送：" + ("开" if setting.default_push_live_end else "关"),
-        "",
-        "改法：",
-        "  /config 开播AI 开|关    —— 开播推送后是否触发一次 AI 回复",
-        "  /config 下播AI 开|关    —— 下播推送后是否触发一次 AI 回复",
-        "  /config 风格 sakura|neon|minimal|随机",
-        "  /config 开播推送默认 开|关",
-        "  /config 下播推送默认 开|关",
-        "只要卡片不要 AI 回复：/config 开播AI 关",
-    ])
+    return [
+        "开播后触发 AI 回复：" + ("开" if setting.ai_reply_live else "关"),
+        "下播后触发 AI 回复：" + ("开" if setting.ai_reply_live_end else "关"),
+        "卡片风格：" + (setting.card_style or default_style),
+        "新订阅默认开播推送：" + ("开" if setting.default_push_live else "关"),
+        "新订阅默认下播推送：" + ("开" if setting.default_push_live_end else "关"),
+        "/config 开播AI 开|关    只发卡片不叫 AI：/config 开播AI 关",
+        "/config 下播AI 开|关",
+        "/config 风格 " + style_list_text() + "|随机",
+        "/config 开播推送默认 开|关",
+        "/config 下播推送默认 开|关",
+    ]
 
 
-def register_settings(plugin: Any, state: Any) -> None:
+async def _setting_view(state: Any, group_id: int) -> Any:
+    async with state.database.session() as session:
+        return db.setting_view(await db.get_group_setting(session, group_id))
 
-    @plugin.command("开播状态")
-    async def _overview(reply: Any, config: Any) -> None:
-        group_id = group_id_of(reply.event)
+
+async def _ensure_setting(state: Any, group_id: int, config: Any) -> Any:
+    async with state.database.transaction() as session:
+        return db.setting_view(
+            await db.ensure_group_setting(
+                session,
+                group_id,
+                {
+                    "card_style": config.default_card_style,
+                    "ai_reply_live": config.default_ai_reply_live,
+                    "ai_reply_live_end": config.default_ai_reply_live_end,
+                    "default_push_live": config.default_push_live,
+                    "default_push_live_end": config.default_push_live_end,
+                },
+            )
+        )
+
+
+async def _set_field(state: Any, group_id: int, field: str, value: Any) -> None:
+    async with state.database.transaction() as session:
+        setting = await db.ensure_group_setting(session, group_id)
+        setattr(setting, field, value)
+
+
+async def collect_states(ctx: Any, state: Any, rows: list[Any]) -> tuple[dict[int, Any], bool]:
+    """取每个直播间的状态：优先刚刚向 B 站查的实时结果，其次用最近一次轮询落库的结果。
+
+    返回 (状态映射, 是否全部来自实时查询)。
+    """
+    room_ids = [row.room_id for row in rows]
+    fresh: dict[int, Any] = {}
+    poller = getattr(state, "poller", None)
+    if poller is not None and room_ids:
+        try:
+            fresh = await poller.refresh(room_ids)
+        except Exception as exc:
+            ctx.logger.warning(f"实时查询直播状态失败，改用最近一次轮询结果: {exc!r}")
+    async with state.database.session() as session:
+        stored: dict[int, Any] = {}
+        for room_id in room_ids:
+            stored[room_id] = db.room_view(await db.get_room_state(session, room_id))
+    states: dict[int, Any] = {}
+    for room_id in room_ids:
+        snapshot = fresh.get(room_id)
+        if snapshot is not None:
+            states[room_id] = db.RoomStateView(
+                room_id=room_id,
+                live_status=snapshot.live_status,
+                title=snapshot.title,
+                cover_url=snapshot.cover_url,
+                area_name=snapshot.area_name,
+                online=snapshot.online,
+            )
+        elif stored.get(room_id) is not None:
+            states[room_id] = stored[room_id]
+    return states, bool(room_ids) and len(fresh) == len(room_ids)
+
+
+def register_settings_commands(registrar: Any, ctx: Any, state: Any) -> list[str]:
+    names: list[str] = []
+
+    @registrar.register(
+        "开播状态",
+        description="出一张开播状态总览图：本群关注的主播，开播中的带粉色圆环",
+        permission=PERM_EVERYONE,
+    )
+    async def _overview(command_ctx: Any) -> None:
+        group_id = conv_group_id(command_ctx)
         if not group_id:
-            await reply.send("这个命令只能在群里用。")
+            await fail(command_ctx, ctx, "只能在群里使用", "这个命令需要在群聊里发送。")
             return
         async with state.database.session() as session:
             rows = [
@@ -74,24 +142,22 @@ def register_settings(plugin: Any, state: Any) -> None:
                 for row in await db.list_group_subscriptions(session, group_id)
             ]
         if not rows:
-            await reply.send("本群还没有监听任何直播间，用 /监听 房间号 添加。")
+            await cards.send_card(
+                command_ctx,
+                cards.message_card(title="本群还没有监听任何直播间", lines=["用 /监听 房间号 添加第一个"]),
+                screenshots=shots(ctx),
+            )
             return
+        config = state.config
         rows = rows[: int(config.overview_max_hosts)]
-        async with state.database.session() as session:
-            states = {}
-            for row in rows:
-                states[row.room_id] = db.room_view(
-                    await db.get_room_state(session, row.room_id)
-                )
-        live_rows = [
-            row for row in rows
-            if states.get(row.room_id) is not None and int(states[row.room_id].live_status) == 1
-        ]
-        hosts = await state.build_overview_hosts(rows, states)
+        states, is_fresh = await collect_states(ctx, state, rows)
+        live_count = sum(1 for view in states.values() if int(view.live_status) == 1)
         title = "本群关注的主播"
+        source_note = "刚刚查询" if is_fresh else "最近一次轮询"
         summary = (
-            "共 " + str(len(rows)) + " 位，" + str(len(live_rows)) + " 位正在直播"
+            "共 " + str(len(rows)) + " 位，" + str(live_count) + " 位正在直播（" + source_note + "）"
         )
+        hosts = await state.build_overview_hosts(rows, states)
         style = await state.style_for(group_id)
         image = None
         try:
@@ -101,128 +167,188 @@ def register_settings(plugin: Any, state: Any) -> None:
                 ),
                 timeout=OVERVIEW_TIMEOUT,
             )
-        except TimeoutError:
+        except (asyncio.TimeoutError, TimeoutError):
             image = None
         if image is not None:
             try:
-                await reply.image(data=image, filename=OVERVIEW_FILENAME)
-                return
+                sent = await command_ctx.service.send_image_bytes(
+                    command_ctx.kind,
+                    command_ctx.conv_id,
+                    image,
+                    at_user_id=None,
+                    filename=OVERVIEW_FILENAME,
+                )
             except Exception:
-                pass
-        lines = [title, summary, ""]
-        for row in rows:
-            state_row = states.get(row.room_id)
-            mark = "开播中" if state_row is not None and int(state_row.live_status) == 1 else "未开播"
-            room_title = state_row.title if state_row is not None and state_row.title else ""
-            suffix = " · " + room_title if room_title else ""
-            lines.append("[" + mark + "] " + (row.name or UNNAMED) + suffix)
-        lines.append("")
-        lines.append("（浏览器截图不可用，已退化成文字）")
-        await reply.send("\n".join(lines))
-
-    @plugin.command("卡片风格 [style:str]")
-    async def _style(style: str | None, reply: Any) -> None:
-        group_id = group_id_of(reply.event)
-        if not group_id:
-            await reply.send("这个命令只能在群里用。")
-            return
-        chosen = _match_style(style)
-        if chosen is None:
-            if style is None or not str(style).strip():
-                current = await state.style_name_for(group_id)
-                await reply.send("当前卡片风格：" + current + "\n可选：" + _style_list_text() + " 或 随机")
+                sent = False
+            if sent:
                 return
-            await reply.send("没有这个风格：" + str(style) + "\n可选：" + _style_list_text() + " 或 随机")
-            return
-        async with state.database.transaction() as session:
-            setting = await db.ensure_group_setting(session, group_id)
-            setting.card_style = chosen
-        await reply.send("卡片风格已设为：" + ("每次随机" if chosen == "random" else chosen))
+        table = [
+            [
+                row.name or UNNAMED,
+                status_label(int(states[row.room_id].live_status)) if row.room_id in states else "未开播",
+                str(row.room_id),
+            ]
+            for row in rows
+        ]
+        await cards.send_card(
+            command_ctx,
+            cards.rows_card(
+                title=title,
+                subtitle=summary,
+                columns=["主播", "状态", "房间号"],
+                rows=table,
+                note="总览图渲染不可用，这里退化成文字版",
+            ),
+            screenshots=shots(ctx),
+        )
 
-    @plugin.command("config [key:str] [value:str]")
-    async def _config(key: str | None, value: str | None, reply: Any, config: Any) -> None:
-        group_id = group_id_of(reply.event)
+    names.append("开播状态")
+
+    @registrar.register(
+        "卡片风格",
+        description="查看或设置本群的开播/下播卡片风格",
+        usage="[sakura|neon|minimal|随机]",
+        permission=PERM_SUB_ADMIN,
+        params=(("风格", "sakura（樱花粉）/ neon（霓虹暗）/ minimal（极简）/ 随机"),),
+    )
+    async def _style(command_ctx: Any) -> None:
+        group_id = conv_group_id(command_ctx)
         if not group_id:
-            await reply.send("这个命令只能在群里用。")
+            await fail(command_ctx, ctx, "只能在群里使用", "这个命令需要在群聊里发送。")
             return
-        async with state.database.session() as session:
-            setting = db.setting_view(await db.get_group_setting(session, group_id))
+        args = command_args(command_ctx)
+        chosen = match_style(args[0]) if args else None
+        if args and chosen is None:
+            await fail(command_ctx, ctx, "没有这个风格", "可选：" + style_list_text() + " 或 随机")
+            return
+        config = state.config
+        setting = await _setting_view(state, group_id)
         if setting is None:
-            async with state.database.transaction() as session:
-                setting = db.setting_view(await db.ensure_group_setting(
-                    session,
-                    group_id,
-                    {
-                        "card_style": config.default_card_style,
-                        "ai_reply_live": config.default_ai_reply_live,
-                        "ai_reply_live_end": config.default_ai_reply_live_end,
-                        "default_push_live": config.default_push_live,
-                        "default_push_live_end": config.default_push_live_end,
-                    },
-                ))
-        if key is None or not str(key).strip():
-            await reply.send(config_text(setting, config))
+            setting = await _ensure_setting(state, group_id, config)
+        if not args:
+            await cards.send_card(
+                command_ctx,
+                cards.kv_card(
+                    title="卡片风格",
+                    items=[
+                        ("当前风格", setting.card_style or config.default_card_style),
+                        ("可选风格", style_list_text()),
+                    ],
+                    note="用法：/卡片风格 neon；改回每次随机：/卡片风格 随机",
+                ),
+                screenshots=shots(ctx),
+            )
             return
-        await _apply(reply, state, group_id, str(key).strip(), value)
+        await _set_field(state, group_id, "card_style", chosen)
+        await cards.send_card(
+            command_ctx,
+            cards.kv_card(
+                title="卡片风格已更新",
+                items=[("当前风格", "每次随机" if chosen == "random" else chosen), ("可选风格", style_list_text())],
+            ),
+            screenshots=shots(ctx),
+        )
+
+    names.append("卡片风格")
+
+    @registrar.register(
+        "config",
+        description="查看或修改本群的推送设置（含开播/下播是否触发 AI 回复）",
+        usage="[配置项] [值]",
+        permission=PERM_SUB_ADMIN,
+        params=(("配置项", "开播AI / 下播AI / 风格 / 开播推送默认 / 下播推送默认"), ("值", "开|关 或风格名")),
+    )
+    async def _config(command_ctx: Any) -> None:
+        group_id = conv_group_id(command_ctx)
+        if not group_id:
+            await fail(command_ctx, ctx, "只能在群里使用", "这个命令需要在群聊里发送。")
+            return
+        config = state.config
+        setting = await _setting_view(state, group_id)
+        if setting is None:
+            setting = await _ensure_setting(state, group_id, config)
+        args = command_args(command_ctx)
+        if not args:
+            await cards.send_card(
+                command_ctx,
+                cards.message_card(title="本群推送设置", lines=config_lines(setting, config)),
+                screenshots=shots(ctx),
+            )
+            return
+        key = args[0].lower()
+        value = args[1] if len(args) > 1 else None
+        await _apply_config(ctx, state, command_ctx, group_id, key, value, config)
+
+    names.append("config")
+    return names
 
 
-async def _apply(reply: Any, state: Any, group_id: int, key: str, value: str | None) -> None:
-    """写入一项群配置。"""
-    normalized = key.lower()
-    if normalized in {"开播ai", "liveai", "ai开播"}:
-        switch = _parse_switch(value)
+async def _apply_config(
+    ctx: Any, state: Any, command_ctx: Any, group_id: int, key: str, value: str | None, config: Any
+) -> None:
+    """写入一项群配置并回一张卡片。"""
+    from .commands import parse_switch
+
+    switch = parse_switch(value)
+    if key in {"开播ai", "liveai"}:
         if switch is None:
-            await reply.send("用法：/config 开播AI 开|关")
+            await fail(command_ctx, ctx, "用法不对", "/config 开播AI 开|关")
             return
-        await _set_bool(state, group_id, "ai_reply_live", switch)
-        await reply.send("开播后触发 AI 回复：" + ("已开启" if switch else "已关闭"))
+        await _set_field(state, group_id, "ai_reply_live", switch)
+        await cards.send_card(
+            command_ctx,
+            cards.kv_card(title="已更新", items=[("开播后触发 AI 回复", "开" if switch else "关")]),
+            screenshots=shots(ctx),
+        )
         return
-    if normalized in {"下播ai", "liveendai", "ai下播"}:
-        switch = _parse_switch(value)
+    if key in {"下播ai", "liveendai"}:
         if switch is None:
-            await reply.send("用法：/config 下播AI 开|关")
+            await fail(command_ctx, ctx, "用法不对", "/config 下播AI 开|关")
             return
-        await _set_bool(state, group_id, "ai_reply_live_end", switch)
-        await reply.send("下播后触发 AI 回复：" + ("已开启" if switch else "已关闭"))
+        await _set_field(state, group_id, "ai_reply_live_end", switch)
+        await cards.send_card(
+            command_ctx,
+            cards.kv_card(title="已更新", items=[("下播后触发 AI 回复", "开" if switch else "关")]),
+            screenshots=shots(ctx),
+        )
         return
-    if normalized in {"风格", "style", "卡片风格"}:
-        chosen = _match_style(value)
+    if key in {"风格", "style", "卡片风格"}:
+        chosen = match_style(value)
         if chosen is None:
-            await reply.send("用法：/config 风格 " + _style_list_text() + "|随机")
+            await fail(command_ctx, ctx, "用法不对", "/config 风格 " + style_list_text() + "|随机")
             return
-        async with state.database.transaction() as session:
-            setting = await db.ensure_group_setting(session, group_id)
-            setting.card_style = chosen
-        await reply.send("卡片风格已设为：" + ("每次随机" if chosen == "random" else chosen))
+        await _set_field(state, group_id, "card_style", chosen)
+        await cards.send_card(
+            command_ctx,
+            cards.kv_card(title="已更新", items=[("卡片风格", "每次随机" if chosen == "random" else chosen)]),
+            screenshots=shots(ctx),
+        )
         return
-    if normalized in {"开播推送默认", "defaultpushlive"}:
-        switch = _parse_switch(value)
+    if key in {"开播推送默认", "defaultpushlive"}:
         if switch is None:
-            await reply.send("用法：/config 开播推送默认 开|关")
+            await fail(command_ctx, ctx, "用法不对", "/config 开播推送默认 开|关")
             return
-        await _set_bool(state, group_id, "default_push_live", switch)
-        await reply.send("新订阅默认开播推送：" + ("开" if switch else "关"))
+        await _set_field(state, group_id, "default_push_live", switch)
+        await cards.send_card(
+            command_ctx,
+            cards.kv_card(title="已更新", items=[("新订阅默认开播推送", "开" if switch else "关")]),
+            screenshots=shots(ctx),
+        )
         return
-    if normalized in {"下播推送默认", "defaultpushliveend"}:
-        switch = _parse_switch(value)
+    if key in {"下播推送默认", "defaultpushliveend"}:
         if switch is None:
-            await reply.send("用法：/config 下播推送默认 开|关")
+            await fail(command_ctx, ctx, "用法不对", "/config 下播推送默认 开|关")
             return
-        await _set_bool(state, group_id, "default_push_live_end", switch)
-        await reply.send("新订阅默认下播推送：" + ("开" if switch else "关"))
+        await _set_field(state, group_id, "default_push_live_end", switch)
+        await cards.send_card(
+            command_ctx,
+            cards.kv_card(title="已更新", items=[("新订阅默认下播推送", "开" if switch else "关")]),
+            screenshots=shots(ctx),
+        )
         return
-    await reply.send("不认识的配置项：" + key + "\n\n" + config_text(await _setting(state, group_id), None))
+    await cards.send_card(
+        command_ctx,
+        cards.message_card(title="不认识的配置项：" + key, lines=config_lines(await _ensure_setting(state, group_id, config), config)),
+        screenshots=shots(ctx),
+    )
 
-
-async def _set_bool(state: Any, group_id: int, field: str, value: bool) -> None:
-    async with state.database.transaction() as session:
-        setting = await db.ensure_group_setting(session, group_id)
-        setattr(setting, field, value)
-
-
-async def _setting(state: Any, group_id: int) -> Any:
-    async with state.database.transaction() as session:
-        return db.setting_view(await db.ensure_group_setting(session, group_id))
-
-
-__all__ = ["config_text", "register_settings"]

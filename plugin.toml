@@ -1,7 +1,7 @@
 # NeoBot 插件清单：neobot_modloader 在启动时扫描插件目录读取本文件。
 # 字段语义见 NeoBot 仓库 packages/modloader/src/neobot_modloader/loading/manifest.py。
 name = "streaming_parser"
-version = "0.2.0"
+version = "0.3.0"
 description = "流媒体平台解析：B 站直播间监听、开播/下播推送与卡片渲染（amagi 协议的纯 Python 实现）"
 author = "SuperQuail"
 license = "MIT"

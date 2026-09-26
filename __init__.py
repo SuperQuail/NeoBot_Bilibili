@@ -29,7 +29,7 @@ from .notify import Notifier
 from .poller import LivePoller
 from .render import CardRenderer, resolve_style
 
-PLUGIN_VERSION = "0.2.0"
+PLUGIN_VERSION = "0.3.0"
 PLUGIN_DESCRIPTION = "流媒体平台解析：B 站直播间监听、开播/下播推送与卡片渲染"
 
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -233,8 +233,8 @@ class PluginState:
 
 state = PluginState()
 
-#: 命令在导入期注册（handler 只会在插件加载完成后被调用）
-commands.register(plugin, state)
+#: 命令在 on_load 里注册：宿主命令表（ctx.app_commands）要到那时才注入，
+#:  注册进去的命令才会出现在 /help 列表与详情里。
 
 
 @plugin.on_load
@@ -246,9 +246,10 @@ async def _on_load(ctx: Any) -> None:
         config = StreamConfig(**config)
     state.setup(ctx, config)
     expired = state.assets.purge_expired() if state.assets is not None else 0
+    registered = commands.register_commands(ctx, state)
     ctx.logger.info(
         f"{ctx.plugin_name} 已加载：轮询间隔 {config.poll_interval_seconds}s，"
-        f"清理过期图片缓存 {expired} 个"
+        f"清理过期图片缓存 {expired} 个，注册命令 {len(registered)} 条"
     )
 
 

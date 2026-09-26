@@ -1,7 +1,11 @@
-"""订阅类命令：监听 / 取消监听 / 监听列表 / 开播下播推送开关。
+"""订阅类命令：监听 / 取消监听 / 监听列表（推送开关见 commands_toggle.py）。
 
-命令用 MessagePattern 的 <name:type> 语法；群号从 reply.event 里取，
-所以这些命令天然只能在群里用。设置类命令见 settings_commands.py。
+与旧实现的区别：
+1. 命令注册进宿主命令表（ctx.app_commands.register），因此会出现在 /help 列表与详情里，
+   权限校验与参数切分都交给宿主统一处理；
+2. 回复统一走 cards.send_card（与 /help 同一套卡片渲染），渲染不可用时自动降级纯文本。
+
+注意：宿主命令在群聊里需要 @机器人 才会触发，私聊直接发即可。
 """
 
 from __future__ import annotations
@@ -9,9 +13,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from . import db
+from . import cards, db
 from .bilibili.errors import BilibiliAPIError, BilibiliTransportError
 from .bilibili.urls import live_room_page_url
+
+try:  # 无 NeoBot 环境（CI/单测）退化成常量，取值与本体一致
+    from neobot_app.commands.model import PERM_EVERYONE, PERM_SUB_ADMIN
+except Exception:  # pragma: no cover
+    PERM_EVERYONE = 0
+    PERM_SUB_ADMIN = 1
 
 MAX_TARGET_LENGTH = 256
 UNNAMED = "未命名"
@@ -22,7 +32,7 @@ _DIGITS = re.compile("[0-9]+")
 def parse_target(raw: str) -> tuple[str, int]:
     """把用户输入解析成 (kind, id)，kind 为 room 或 uid。
 
-    支持：纯数字（房间号或短号）、直播间链接、UP 主空间链接、uid 前缀写法。
+    支持：纯数字（房间号或短号）、直播间链接、UP 主空间链接、uid: 前缀写法。
     """
     text = (raw or "").strip()
     if not text or len(text) > MAX_TARGET_LENGTH:
@@ -43,39 +53,112 @@ def parse_target(raw: str) -> tuple[str, int]:
     raise ValueError("请提供房间号、短号、直播间链接或 UP 主空间链接")
 
 
-def group_id_of(event: dict[str, Any]) -> int:
-    """取群号；私聊或拿不到时返回 0。"""
-    if str(event.get("message_type") or "") != "group":
+def parse_switch(value: str | None) -> bool | None:
+    """开/关文案解析；无法识别返回 None。"""
+    text = (value or "").strip().lower()
+    if text in {"1", "true", "yes", "y", "on", "开", "开启"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", "关", "关闭"}:
+        return False
+    return None
+
+
+def conv_group_id(command_ctx: Any) -> int:
+    """取群号；私聊返回 0（这些命令只在群里生效）。"""
+    if str(getattr(command_ctx, "kind", "")) != "group":
         return 0
-    value = event.get("group_id")
     try:
-        return int(value)
+        return int(getattr(command_ctx, "conv_id", 0))
     except (TypeError, ValueError):
         return 0
 
 
-def register(plugin: Any, state: Any) -> None:
-    """挂订阅类命令；末尾转交给设置类命令。"""
+def command_args(command_ctx: Any) -> list[str]:
+    """命令参数列表（宿主已用 shlex 切分）。"""
+    return [str(item) for item in (getattr(command_ctx, "args", None) or [])]
 
-    @plugin.command("监听 <target:str>")
-    async def _subscribe(target: str, reply: Any, config: Any) -> None:
-        group_id = group_id_of(reply.event)
+
+def shots(ctx: Any) -> Any:
+    """每次都现取截图端口：软重启会换新实例，不能缓存。"""
+    return getattr(ctx, "screenshots", None)
+
+
+def usage_card(title: str, lines: list[str]) -> dict[str, Any]:
+    return cards.message_card(title=title, lines=lines, note="群聊里需要先 @机器人 再发命令")
+
+
+async def fail(command_ctx: Any, ctx: Any, title: str, text: str, hint: str = "") -> None:
+    """统一的失败卡片。"""
+    await cards.send_card(
+        command_ctx,
+        cards.error_card(title=title, text=text, hint=hint),
+        screenshots=shots(ctx),
+    )
+
+
+def register_commands(ctx: Any, state: Any) -> list[str]:
+    """注册全部命令，返回请求注册的命令名（/help 里能看到的就是这些）。"""
+    registrar = getattr(ctx, "app_commands", None)
+    if registrar is None or not getattr(registrar, "available", True):
+        ctx.logger.warning("命令注册表不可用，streaming_parser 的命令未注册")
+        return []
+    registered = _register_subscription_commands(registrar, ctx, state)
+    from .commands_toggle import register_toggle_commands
+    from .settings_commands import register_settings_commands
+
+    registered += register_toggle_commands(registrar, ctx, state)
+    registered += register_settings_commands(registrar, ctx, state)
+    renames = getattr(registrar, "renames", None)
+    if callable(renames):
+        for requested, actual in renames():
+            ctx.logger.warning(f"命令 /{requested} 因重名被注册为 /{actual}")
+    return registered
+
+
+def _register_subscription_commands(registrar: Any, ctx: Any, state: Any) -> list[str]:
+    names: list[str] = []
+
+    @registrar.register(
+        "监听",
+        description="让本群监听一个直播间（开播/下播时推送卡片）",
+        usage="<房间号|短号|直播间链接|UP主空间链接>",
+        permission=PERM_SUB_ADMIN,
+        params=(("目标", "房间号、短号、直播间链接或 UP 主空间链接"),),
+    )
+    async def _subscribe(command_ctx: Any) -> None:
+        group_id = conv_group_id(command_ctx)
         if not group_id:
-            await reply.send("这个命令只能在群里用。")
+            await fail(command_ctx, ctx, "只能在群里使用", "这个命令需要在群聊里发送。")
+            return
+        args = command_args(command_ctx)
+        if not args:
+            await cards.send_card(
+                command_ctx,
+                usage_card(
+                    "监听直播间",
+                    [
+                        "/监听 <房间号|短号|直播间链接|UP主空间链接>",
+                        "例如：/监听 1914112138",
+                        "例如：/监听 https://space.bilibili.com/392669996",
+                    ],
+                ),
+                screenshots=shots(ctx),
+            )
             return
         try:
-            kind, value = parse_target(target)
+            kind, value = parse_target(args[0])
         except ValueError as exc:
-            await reply.send("参数不对：" + str(exc))
+            await fail(command_ctx, ctx, "参数不对", str(exc))
             return
         try:
             resolved = await state.resolve_target(kind, value)
         except (BilibiliAPIError, BilibiliTransportError) as exc:
-            await reply.send("查询直播间失败：" + str(exc))
+            await fail(command_ctx, ctx, "查询直播间失败", str(exc))
             return
         except ValueError as exc:
-            await reply.send(str(exc))
+            await fail(command_ctx, ctx, "没有找到直播间", str(exc))
             return
+        config = state.config
         async with state.database.transaction() as session:
             _, created = await db.upsert_subscription(
                 session,
@@ -88,41 +171,73 @@ def register(plugin: Any, state: Any) -> None:
                 push_live=config.default_push_live,
                 push_live_end=config.default_push_live_end,
             )
-        head = "已开始监听" if created else "更新了监听信息"
+        title = "已开始监听" if created else "已更新监听信息"
         name = resolved.get("name") or UNNAMED
-        await reply.send(
-            head + "：" + name + "\n"
-            + "房间：" + live_room_page_url(resolved["room_id"]) + "\n"
-            + "用 /开播状态 可以看到本群关注的全部主播。"
+        await cards.send_card(
+            command_ctx,
+            cards.kv_card(
+                title=title,
+                items=[
+                    ("主播", name),
+                    ("房间号", str(resolved["room_id"])),
+                    ("开播推送", "开" if config.default_push_live else "关"),
+                    ("下播推送", "开" if config.default_push_live_end else "关"),
+                    ("直播间", live_room_page_url(resolved["room_id"])),
+                ],
+                note="用 /开播状态 看本群关注的主播，用 /config 调整推送与 AI 回复",
+            ),
+            screenshots=shots(ctx),
         )
 
-    @plugin.command("取消监听 <target:str>")
-    async def _unsubscribe(target: str, reply: Any) -> None:
-        group_id = group_id_of(reply.event)
+    names.append("监听")
+
+    @registrar.register(
+        "取消监听",
+        description="取消本群对某个直播间的监听",
+        usage="<房间号|短号|直播间链接|UP主空间链接>",
+        permission=PERM_SUB_ADMIN,
+        params=(("目标", "与 /监听 相同的目标写法"),),
+    )
+    async def _unsubscribe(command_ctx: Any) -> None:
+        group_id = conv_group_id(command_ctx)
         if not group_id:
-            await reply.send("这个命令只能在群里用。")
+            await fail(command_ctx, ctx, "只能在群里使用", "这个命令需要在群聊里发送。")
+            return
+        args = command_args(command_ctx)
+        if not args:
+            await cards.send_card(command_ctx, usage_card("取消监听", ["/取消监听 <房间号|短号|链接>"]), screenshots=shots(ctx))
             return
         try:
-            kind, value = parse_target(target)
+            kind, value = parse_target(args[0])
         except ValueError as exc:
-            await reply.send("参数不对：" + str(exc))
+            await fail(command_ctx, ctx, "参数不对", str(exc))
             return
         row = await state.find_subscription(group_id, kind, value)
         if row is None:
-            await reply.send("本群没有监听这个直播间。")
+            await fail(command_ctx, ctx, "没有监听这个直播间", "本群当前没有监听它。", hint="用 /监听列表 看看都在监听什么")
             return
         async with state.database.transaction() as session:
             removed = await db.remove_subscription(session, group_id, row.room_id)
         if removed:
-            await reply.send("已取消监听：" + (row.name or UNNAMED))
+            await cards.send_card(
+                command_ctx,
+                cards.kv_card(title="已取消监听", items=[("直播间", row.name or UNNAMED), ("房间号", str(row.room_id))]),
+                screenshots=shots(ctx),
+            )
         else:
-            await reply.send("取消失败，请稍后再试。")
+            await fail(command_ctx, ctx, "取消失败", "请稍后再试一次。")
 
-    @plugin.command("监听列表")
-    async def _list(reply: Any) -> None:
-        group_id = group_id_of(reply.event)
+    names.append("取消监听")
+
+    @registrar.register(
+        "监听列表",
+        description="列出本群监听的全部直播间与推送开关",
+        permission=PERM_EVERYONE,
+    )
+    async def _list(command_ctx: Any) -> None:
+        group_id = conv_group_id(command_ctx)
         if not group_id:
-            await reply.send("这个命令只能在群里用。")
+            await fail(command_ctx, ctx, "只能在群里使用", "这个命令需要在群聊里发送。")
             return
         async with state.database.session() as session:
             rows = [
@@ -130,60 +245,34 @@ def register(plugin: Any, state: Any) -> None:
                 for row in await db.list_group_subscriptions(session, group_id)
             ]
         if not rows:
-            await reply.send("本群还没有监听任何直播间，用 /监听 房间号 添加。")
-            return
-        lines = ["本群共监听 " + str(len(rows)) + " 个直播间："]
-        for index, row in enumerate(rows, start=1):
-            flags = ["开播推送" + ("开" if row.push_live else "关")]
-            flags.append("下播推送" + ("开" if row.push_live_end else "关"))
-            lines.append(
-                str(index) + ". " + (row.name or UNNAMED)
-                + "（房间 " + str(row.room_id) + "） · " + "、".join(flags)
+            await cards.send_card(
+                command_ctx,
+                cards.message_card(title="本群还没有监听任何直播间", lines=["用 /监听 房间号 添加第一个"]),
+                screenshots=shots(ctx),
             )
-        lines.append("开关：/开播推送 房间号 开|关，/下播推送 房间号 开|关")
-        await reply.send("\n".join(lines))
-
-    @plugin.command("开播推送 <target:str> <value:bool>")
-    async def _toggle_live(target: str, value: bool, reply: Any) -> None:
-        await _toggle(reply, target, value, kind="live", state=state)
-
-    @plugin.command("下播推送 <target:str> <value:bool>")
-    async def _toggle_live_end(target: str, value: bool, reply: Any) -> None:
-        await _toggle(reply, target, value, kind="live_end", state=state)
-
-    from .settings_commands import register_settings
-
-    register_settings(plugin, state)
-
-
-async def _toggle(
-    reply: Any, target: str, value: bool, *, kind: str, state: Any
-) -> None:
-    """切换某个直播间的开播/下播推送开关。"""
-    group_id = group_id_of(reply.event)
-    if not group_id:
-        await reply.send("这个命令只能在群里用。")
-        return
-    try:
-        target_kind, number = parse_target(target)
-    except ValueError as exc:
-        await reply.send("参数不对：" + str(exc))
-        return
-    row = await state.find_subscription(group_id, target_kind, number)
-    if row is None:
-        await reply.send("本群没有监听这个直播间，先用 /监听 添加。")
-        return
-    async with state.database.transaction() as session:
-        await db.set_subscription_flags(
-            session,
-            group_id,
-            row.room_id,
-            push_live=value if kind == "live" else None,
-            push_live_end=value if kind == "live_end" else None,
+            return
+        table = [
+            [
+                str(index),
+                row.name or UNNAMED,
+                str(row.room_id),
+                "开" if row.push_live else "关",
+                "开" if row.push_live_end else "关",
+            ]
+            for index, row in enumerate(rows, start=1)
+        ]
+        await cards.send_card(
+            command_ctx,
+            cards.rows_card(
+                title="本群监听的直播间",
+                subtitle="共 " + str(len(rows)) + " 个",
+                columns=["#", "主播", "房间号", "开播推送", "下播推送"],
+                rows=table,
+                note="用 /开播推送 或 /下播推送 单独开关某一个直播间",
+            ),
+            screenshots=shots(ctx),
         )
-    label = "开播" if kind == "live" else "下播"
-    state_text = "开启" if value else "关闭"
-    await reply.send("已" + state_text + " " + (row.name or UNNAMED) + " 的" + label + "推送。")
 
+    names.append("监听列表")
+    return names
 
-__all__ = ["MAX_TARGET_LENGTH", "UNNAMED", "group_id_of", "parse_target", "register"]

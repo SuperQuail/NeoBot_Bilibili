@@ -174,6 +174,24 @@ class LivePoller:
                     stats.transitions += 1
         return transitions, stats
 
+    async def refresh(self, room_ids: list[int]) -> dict[int, RoomSnapshot]:
+        """按需查询一组房间的当前状态：不写库、不发通知，仅用于即时展示。
+
+        /开播状态 用它保证总览图是实时的，而不是等下一次轮询；
+        写库与跳变判定仍然只由 poll_once 负责，避免这里悄悄吞掉一次真实的开播跳变。
+        """
+        if not room_ids:
+            return {}
+        semaphore = asyncio.Semaphore(self._concurrency)
+        snapshots = await asyncio.gather(
+            *(self._fetch(room_id, semaphore) for room_id in room_ids)
+        )
+        return {
+            room_id: snapshot
+            for room_id, snapshot in zip(room_ids, snapshots, strict=True)
+            if snapshot is not None
+        }
+
     async def run(
         self,
         stop: asyncio.Event,
