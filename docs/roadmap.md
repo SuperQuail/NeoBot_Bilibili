@@ -3,6 +3,24 @@
 协议来源：[ikenxuan/amagi](https://github.com/ikenxuan/amagi)（TypeScript，多平台 Web 接口 SDK）。
 本插件只移植 **B 站** 部分，优先直播间。
 
+## 落地状态（v0.2.0）
+
+**P0 已全部落地**：三个直播接口封装、短号 ↔ 真实房间号互转、开播/下播轮询与跳变判定、
+卡片推送（3 风格 + 随包字体）、开播状态总览图、`/监听` 一族命令与 `/config`，
+以及渲染不可用时的纯文本降级。测试见仓库 `tests/`（含模板契约测试）。
+
+实现过程中由真实流量补充、参考项目未记录的点：
+
+- `live_time` 的负数哨兵值 `-62170012800`（.NET DateTime.MinValue 秒数），必须归一化为「无开播时间」；
+- `getRoomInfoOld` 的 `data` 可能是空对象，模型要容忍字段缺失；
+- 直播接口沿用 `Referer: https://www.bilibili.com/` 也能跑通，但改成 `https://live.bilibili.com/{room_id}` 更贴近真实前端；
+- 截图的 `file://` 与相对资源一律加载不到（CDP setDocumentContent 落在 about:blank），CSS 与图片必须内联；
+- 内嵌中日韩 woff2 时 `wait_for_fonts=True` 会抛 FontLoadError，必须保留「不等字体校验」的降级。
+
+**P1 未做**：WBI 签名器只有原型与向量验证（`research/`），尚未接线到正式代码；视频弹幕、评论、动态等同理。
+
+**P2 未做**：直播间弹幕长连接。参考项目在这一点上是空白，协议需另行调研。
+
 ## 参考项目的能力边界（实测结论）
 
 | 能力 | amagi 是否实现 | 说明 |

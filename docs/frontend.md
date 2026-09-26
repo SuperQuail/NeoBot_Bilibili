@@ -1,46 +1,40 @@
-# 前端预编译策略
+# 前端与渲染约定
 
-硬性要求：**部署侧不需要任何前端工具链**。最终用户机器上不安装 Node、不装 pnpm、不跑构建；
-仓库里拿到的就是可以直接被浏览器加载的产物。
+## 现状：零构建
 
-## 目录约定（沿用 NeoBot 官方插件的做法）
+卡片的"前端"就是 `templates/` 下的 6 个 **纯 HTML + 内联 CSS** 模板：
 
-| 目录 | 内容 | 是否入库 | 打包分发 |
+``
+templates/
+├── card_sakura.html / card_neon.html / card_minimal.html               # 开播与下播卡片
+├── overview_sakura.html / overview_neon.html / overview_minimal.html   # 开播状态总览
+└── fonts/FusionPixel8px-zh_hans.woff2 (+ OFL 许可)                      # 随包分发的中文字体
+``
+
+渲染路径：Python 侧把数据填进 `{{占位符}}`（`render.py`），交给宿主 `ctx.screenshots`（Chromium + CDP）出 PNG，再 `ctx.send_image` 发出。
+
+模板里不允许出现：`<script>`、`@import`、任何 `http(s)://` 外链。原因是截图端口用 CDP `setDocumentContent` 把 HTML 写进 `about:blank`，**`file://` 与相对路径资源都加载不到**，所以：
+
+- CSS 必须内联在模板的 `<style>` 里；
+- 图片必须由渲染端转成 data URI 再填进去（头像、封面都是这么处理的）；
+- 字体以 `FontFace` 交给截图端口，由端口生成 data URI 的 `@font-face`。
+
+这一层没有 Node、没有任何构建步骤，改模板就是改 HTML，部署侧自然也不需要前端工具链。
+
+## 将来要引入真正的构建时
+
+如果以后需要 React/Vite 这类工程（例如做一个可交互的配置页），沿用 NeoBot 官方插件约定：
+
+| 目录 | 内容 | 入库 | 分发 |
 |---|---|---|---|
-| `frontend/` | 前端源码（Vite + TypeScript），只有开发者需要 | 入库 | **不**分发 |
-| `web/` | 构建产物：`index.html` + `assets/index-<hash>.js` / `.css` | **必须入库** | 分发 |
-| `web/image/` | 产物中的图片等静态资源（可选） | 入库 | 分发 |
+| `frontend/` | 源码，只有开发者需要 | 入库 | **不**分发 |
+| `web/` | 构建产物（`index.html` + `assets/index-<hash>.{js,css}`） | **必须入库** | 分发 |
 
-`node_modules/`、`frontend/dist/`、`.pnpm-store/` 已在 `.gitignore` 中排除。
+构建基线：`base: './'`（支持面板子路径部署）、`build.outDir = '../web'`、`assetsDir = 'assets'`、`sourcemap: false`。
 
-## 构建基线（与官方插件一致）
+**产物与源码必须在同一个 commit 内更新**，且 `node_modules/` 永不入库（NeoBot 面板安装插件走 GitHub 归档 zip，有压缩包 64MB / 解压 256MB / 条目 5000 的硬上限）。
 
-`frontend/vite.config.ts`：
+## 服务端形态（未接入）
 
-```ts
-export default defineConfig({
-  base: './',            // 支持面板子路径部署（base_path）
-  build: {
-    outDir: '../web',    // 产物直接落到 web/
-    assetsDir: 'assets',
-    sourcemap: false,
-    emptyOutDir: true,
-  },
-})
-```
+若要把插件的页面挂到网页面板上，需要声明 `dependencies = ["dashboard>=1.0.0"]` 并实现 `DashboardWebExtension` 协议，在 `on_load` 里用能力 `web.register_extension` 注册，静态资源用 `StaticAssetDirectory` 暴露。当前版本未接入面板。
 
-构建由开发者执行 `pnpm install && pnpm build`，随后把 `web/` 一起提交。
-构建产物与源码必须在同一个 commit 内更新，避免产物与源码脱节。
-
-## 为什么不能提交 node_modules
-
-NeoBot 面板安装插件走 GitHub 归档 zip，有硬性上限：压缩包 ≤ 64MB、解压后 ≤ 256MB、
-条目数 ≤ 5000。把依赖目录提交进仓库会直接导致安装失败。
-
-## 服务端形态
-
-插件自身的 HTTP 能力通过 NeoBot 网页面板（官方 `dashboard` 插件）暴露：插件声明
-`dependencies = ["dashboard>=1.0.0"]`，实现 `DashboardWebExtension` 协议
-（`name` / `prefixes` / `auth_prefixes` / `panel_entry()` / `handle_request()`），
-在 `on_load` 里通过能力 `web.register_extension` 注册，静态资源用
-`StaticAssetDirectory` 暴露 `web/` 目录。当前版本尚未接入面板。
