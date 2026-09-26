@@ -24,7 +24,7 @@ jobs:
 
       - name: 安装测试依赖
         # pydantic / sqlalchemy / httpx 在真实运行环境由 NeoBot 本体提供，CI 里单独装
-        run: pip install pytest pytest-asyncio pytest-timeout pydantic "sqlalchemy>=2" httpx
+        run: pip install pytest pytest-asyncio pytest-timeout pydantic "sqlalchemy[asyncio]>=2" httpx
 
       - name: 单元测试
         # 没有 NeoBot 时 tests/conftest.py 会装一个最小 modloader 替身，
