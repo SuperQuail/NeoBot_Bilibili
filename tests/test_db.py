@@ -1,4 +1,4 @@
-"""数据层与轮询落库测试（需要真实的 neobot_modloader，CI 里会跳过）。"""
+"""数据层、轮询落库与推送链路测试（需要真实的 neobot_modloader，CI 里会跳过）。"""
 
 from __future__ import annotations
 
@@ -205,4 +205,221 @@ class TestPollOnce:
         transitions, stats = await poller.poll_once()
         assert transitions == []
         assert stats.checked == 0
+
+
+
+class FakeCtx:
+    """够用的 ctx 替身：只实现 Notifier 真正会用的那几个方法。"""
+
+    def __init__(self, services=None):
+        self.sent_images = []
+        self.sent_texts = []
+        self.plugin_host = _Host(_Services(services or {}))
+
+    def conversation_from_event(self, event):
+        return 'conv:' + str(event.get('group_id'))
+
+    async def send_image(self, conversation, *, data, filename):
+        self.sent_images.append((conversation, data, filename))
+
+    async def send_group(self, group_id, message):
+        self.sent_texts.append((group_id, message))
+
+
+class _Host:
+    def __init__(self, services):
+        self.services = services
+
+
+class _Services:
+    def __init__(self, mapping):
+        self._mapping = mapping
+
+    def get(self, name, default=None):
+        return self._mapping.get(name, default)
+
+
+class FakeRenderer:
+    def __init__(self, data=b'PNG'):
+        self.data = data
+        self.calls = []
+
+    async def render_card(self, values, *, style):
+        self.calls.append((values, style))
+        return self.data
+
+
+class FakeAssets:
+    def __init__(self):
+        self.urls = []
+
+    async def fetch_data_uri(self, url):
+        self.urls.append(url)
+        return 'data:image/png;base64,AA' if url else ''
+
+
+class FakeHub:
+    def __init__(self):
+        self.calls = []
+
+    async def publish(self, **kwargs):
+        self.calls.append(kwargs)
+        return True
+
+
+async def make_transition(room_id=10, kind=EVENT_LIVE, live_status=1):
+    from streaming_parser.poller import RoomSnapshot, Transition
+
+    snapshot = RoomSnapshot(
+        room_id=room_id,
+        live_status=live_status,
+        title='今晚杂谈',
+        cover_url='https://example.invalid/cover.jpg',
+        area_name='虚拟主播',
+        online=12345,
+    )
+    return Transition(kind=kind, room_id=room_id, snapshot=snapshot, previous_status=0)
+
+
+def build_notifier(database, ctx, *, renderer=None, config=None, assets=None):
+    from streaming_parser.config import StreamConfig
+    from streaming_parser.notify import Notifier
+
+    return Notifier(
+        ctx=ctx,
+        database=database,
+        renderer=renderer or FakeRenderer(),
+        assets=assets or FakeAssets(),
+        config=config or StreamConfig(),
+    )
+
+
+class TestNotifierIntegration:
+    async def test_live_push_sends_card_and_triggers_ai(self, database):
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(
+                session, group_id=100, room_id=10, uid=7, name='星野遥', push_live=True
+            )
+        hub = FakeHub()
+        ctx = FakeCtx({'notification_hub': hub})
+        renderer = FakeRenderer(data=b'CARD')
+        notifier = build_notifier(database, ctx, renderer=renderer)
+
+        await notifier.handle_transition(await make_transition())
+
+        assert len(ctx.sent_images) == 1
+        conversation, data, filename = ctx.sent_images[0]
+        assert conversation == 'conv:100'
+        assert data == b'CARD'
+        assert filename.endswith('.png')
+        assert ctx.sent_texts == []
+        values, style = renderer.calls[0]
+        assert values['name'] == '星野遥'
+        assert values['status_text'] == '开播了'
+        assert values['room_id'] == '房间 10'
+        assert style in ('sakura', 'neon', 'minimal')
+        assert len(hub.calls) == 1
+        assert hub.calls[0]['conversation_id'] == '100'
+        assert '星野遥' in hub.calls[0]['content']
+
+    async def test_push_disabled_sends_nothing(self, database):
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(
+                session, group_id=100, room_id=10, push_live=False
+            )
+        hub = FakeHub()
+        ctx = FakeCtx({'notification_hub': hub})
+        notifier = build_notifier(database, ctx)
+
+        await notifier.handle_transition(await make_transition())
+
+        assert ctx.sent_images == []
+        assert ctx.sent_texts == []
+        assert hub.calls == []
+
+    async def test_render_failure_falls_back_to_text(self, database):
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(session, group_id=100, room_id=10, name='甲')
+        hub = FakeHub()
+        ctx = FakeCtx({'notification_hub': hub})
+        notifier = build_notifier(database, ctx, renderer=FakeRenderer(data=None))
+
+        await notifier.handle_transition(await make_transition())
+
+        assert ctx.sent_images == []
+        assert len(ctx.sent_texts) == 1
+        group_id, text = ctx.sent_texts[0]
+        assert group_id == 100
+        assert '【开播】甲' in text
+        assert 'live.bilibili.com/10' in text
+        assert len(hub.calls) == 1
+
+    async def test_ai_reply_can_be_disabled_per_group(self, database):
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(session, group_id=100, room_id=10)
+            setting = await pdb.ensure_group_setting(session, 100, {})
+            setting.ai_reply_live = False
+        hub = FakeHub()
+        ctx = FakeCtx({'notification_hub': hub})
+        notifier = build_notifier(database, ctx)
+
+        await notifier.handle_transition(await make_transition())
+
+        assert len(ctx.sent_images) == 1
+        assert hub.calls == []
+
+    async def test_live_end_uses_its_own_switch(self, database):
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(
+                session, group_id=100, room_id=10, name='甲',
+                push_live=True, push_live_end=True,
+            )
+            setting = await pdb.ensure_group_setting(session, 100, {})
+            setting.ai_reply_live = True
+            setting.ai_reply_live_end = False
+        hub = FakeHub()
+        ctx = FakeCtx({'notification_hub': hub})
+        renderer = FakeRenderer()
+        notifier = build_notifier(database, ctx, renderer=renderer)
+
+        await notifier.handle_transition(await make_transition(kind=EVENT_LIVE_END, live_status=0))
+
+        assert len(ctx.sent_images) == 1
+        assert renderer.calls[0][0]['status_text'] == '下播了'
+        assert renderer.calls[0][0]['live_time_text'] == ''
+        assert hub.calls == []
+
+    async def test_hub_missing_falls_back_to_orchestrator(self, database):
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(session, group_id=100, room_id=10)
+
+        class FakeOrchestrator:
+            def __init__(self):
+                self.started = []
+
+            def start_background_reply(self, **kwargs):
+                self.started.append(kwargs)
+                return object()
+
+        orchestrator = FakeOrchestrator()
+        ctx = FakeCtx({'reply_orchestrator': orchestrator})
+        notifier = build_notifier(database, ctx)
+
+        await notifier.handle_transition(await make_transition())
+
+        assert len(orchestrator.started) == 1
+        assert orchestrator.started[0]['kind'] == 'group'
+
+    async def test_group_style_override_is_used(self, database):
+        async with database.transaction() as session:
+            await pdb.upsert_subscription(session, group_id=100, room_id=10)
+            setting = await pdb.ensure_group_setting(session, 100, {})
+            setting.card_style = 'neon'
+        ctx = FakeCtx()
+        renderer = FakeRenderer()
+        notifier = build_notifier(database, ctx, renderer=renderer)
+
+        await notifier.handle_transition(await make_transition())
+
+        assert renderer.calls[0][1] == 'neon'
 
